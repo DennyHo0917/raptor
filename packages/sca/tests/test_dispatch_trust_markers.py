@@ -10,7 +10,6 @@ observed `SCA stderr: KeyError: 'RAPTOR_DIR'` on the direct run.
 from __future__ import annotations
 
 import subprocess
-from pathlib import Path
 from unittest.mock import patch
 
 from packages.sca.agent import run_sca_subprocess

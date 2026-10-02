@@ -992,6 +992,17 @@ def run_skill_dispatch(
             skipped_reason="claude CLI transport disabled "
             "(RAPTOR_CC_TRANSPORT_DISABLED is set)")
 
+    # Operator-forced local-only posture: these skill passes are
+    # claude-bound (agentic tool-using investigations; there is no
+    # Ollama agent loop), so under RAPTOR_NO_CLAUDE skip them cleanly
+    # rather than spawning claude. Same skip shape as the other gates.
+    import os
+    if os.environ.get("RAPTOR_NO_CLAUDE"):
+        return SkillDispatchResult(
+            ran=False,
+            skipped_reason="claude CLI skipped (RAPTOR_NO_CLAUDE is set); "
+            "this pass requires the Claude Code agent")
+
     # Realpath at the resolution seam: symlinked installs otherwise
     # fail the mount-ns visibility check and silently downgrade the
     # dispatch to Landlock-only (see resolve_claude_cli).
@@ -1269,6 +1280,26 @@ def run_skill_dispatch(
 
         if proc.returncode != 0:
             lifecycle_settled = True
+            # An UNAUTHENTICATED claude install (binary on PATH, no login)
+            # exits non-zero with a "Not logged in · Please run /login"
+            # message rather than doing any work. Treat that as a clean
+            # SKIP — same shape as "claude not on PATH" — instead of a
+            # lifecycle FAILURE with a noisy "returned N". This is the
+            # login-free-box case: the skill pass simply can't run, but it
+            # isn't a real failure of the run. Detection is a substring
+            # match on the child's own output (no extra probe/spawn).
+            _child_out = ((proc.stdout or "") + (proc.stderr or "")).lower()
+            if ("not logged in" in _child_out
+                    or "please run /login" in _child_out
+                    or "please run `claude /login`" in _child_out):
+                reason = ("claude CLI present but not logged in — run "
+                          "`claude /login` (skill pass skipped)")
+                fail_lifecycle(run_dir, reason)
+                logger.warning("%s skipped: %s", log_label, reason)
+                return SkillDispatchResult(
+                    ran=False, skipped_reason=reason,
+                    run_dir=run_dir, duration_s=time.monotonic() - t0,
+                    child_exit=str(proc.returncode))
             fail_lifecycle(run_dir, f"subprocess returned {proc.returncode}")
             _persist_child_tail(run_dir, proc,
                                 duration_s=time.monotonic() - t0)
