@@ -996,7 +996,6 @@ def run_skill_dispatch(
     # claude-bound (agentic tool-using investigations; there is no
     # Ollama agent loop), so under RAPTOR_NO_CLAUDE skip them cleanly
     # rather than spawning claude. Same skip shape as the other gates.
-    import os
     if os.environ.get("RAPTOR_NO_CLAUDE"):
         return SkillDispatchResult(
             ran=False,
@@ -1014,6 +1013,20 @@ def run_skill_dispatch(
         reason = preflight()
         if reason is not None:
             return SkillDispatchResult(ran=False, skipped_reason=reason)
+
+    # Present-but-unusable claude (installed, NOT logged in) must skip
+    # like "not on PATH" — otherwise start_lifecycle creates a run dir,
+    # the dispatch spawns `claude -p` which exits with "Not logged in",
+    # and the run surfaces a noisy failure. The cc-probe (cache-first;
+    # a real call only on cold cache) returns None when the transport
+    # is not trustworthy, including the unauthenticated case.
+    from core.llm.cc_probe import probe_cc_session_model
+    if probe_cc_session_model(claude_bin) is None:
+        return SkillDispatchResult(
+            ran=False,
+            skipped_reason="claude CLI present but not usable "
+            "(not logged in, or transport probe failed) — "
+            "run `claude /login`")
 
     target = Path(target).resolve()
     context_dirs = [Path(d).resolve() for d in context_dirs]
@@ -1280,14 +1293,9 @@ def run_skill_dispatch(
 
         if proc.returncode != 0:
             lifecycle_settled = True
-            # An UNAUTHENTICATED claude install (binary on PATH, no login)
-            # exits non-zero with a "Not logged in · Please run /login"
-            # message rather than doing any work. Treat that as a clean
-            # SKIP — same shape as "claude not on PATH" — instead of a
-            # lifecycle FAILURE with a noisy "returned N". This is the
-            # login-free-box case: the skill pass simply can't run, but it
-            # isn't a real failure of the run. Detection is a substring
-            # match on the child's own output (no extra probe/spawn).
+            # Safety net for the cc-probe gate above: auth can expire
+            # between the probe and the dispatch, so detect the CLI's
+            # own "Not logged in" on a non-zero exit and skip cleanly.
             _child_out = ((proc.stdout or "") + (proc.stderr or "")).lower()
             if ("not logged in" in _child_out
                     or "please run /login" in _child_out

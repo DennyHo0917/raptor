@@ -112,7 +112,7 @@ def _lifecycle_dispatcher(start_dir):
     return dispatcher
 
 
-def _run(tmp, run_dir, *, sandbox=None, **overrides):
+def _run(tmp, run_dir, *, sandbox=None, probe_result="fake-model", **overrides):
     dispatcher = _lifecycle_dispatcher(run_dir)
     kwargs = {
         "command": "validate",
@@ -130,6 +130,8 @@ def _run(tmp, run_dir, *, sandbox=None, **overrides):
                side_effect=dispatcher), \
          patch("core.orchestration.skill_dispatch.run_untrusted_networked",
                side_effect=sandbox or dispatcher), \
+         patch("core.llm.cc_probe.probe_cc_session_model",
+               return_value=probe_result), \
          patch.dict("os.environ", _FIRST_PARTY_PROVIDER_ENV):
         return run_skill_dispatch(**kwargs)
 
@@ -247,7 +249,9 @@ class DispatchFlowTests(unittest.TestCase):
             with patch("core.orchestration.skill_dispatch.subprocess.run",
                        side_effect=_tracking), \
                  patch("core.orchestration.skill_dispatch."
-                       "run_untrusted_networked", side_effect=dispatcher):
+                       "run_untrusted_networked", side_effect=dispatcher), \
+                 patch("core.llm.cc_probe.probe_cc_session_model",
+                       return_value="fake-model"):
                 result = run_skill_dispatch(
                     command="validate", target=Path(tmp), tools="Read",
                     budget_usd="1.00", timeout_s=60,
@@ -345,6 +349,15 @@ class DispatchFlowTests(unittest.TestCase):
         self.assertIn("RAPTOR_NO_CLAUDE", result.skipped_reason)
         self.assertIsNone(result.run_dir)
 
+    def test_cc_probe_unusable_skips_before_lifecycle(self):
+        # cc-probe returns None → skip cleanly BEFORE start_lifecycle
+        # creates a run dir. No lifecycle calls, no wasted work.
+        with TemporaryDirectory() as tmp:
+            result = _run(tmp, Path(tmp) / "run", probe_result=None)
+        self.assertFalse(result.ran)
+        self.assertIn("not usable", result.skipped_reason)
+        self.assertIsNone(result.run_dir)
+
     def test_sandbox_setup_error_reason_is_classifiable(self):
         """A SandboxSetupError skip must classify via
         is_sandbox_setup_skip so callers can bound-retry the launch
@@ -428,6 +441,8 @@ class DispatchFlowTests(unittest.TestCase):
                        side_effect=_tracking), \
                  patch("core.orchestration.skill_dispatch."
                        "run_untrusted_networked", side_effect=_sandbox), \
+                 patch("core.llm.cc_probe.probe_cc_session_model",
+                       return_value="fake-model"), \
                  self.assertRaises(KeyboardInterrupt):
                 run_skill_dispatch(
                     command="validate", target=Path(tmp), tools="Read",
@@ -1717,6 +1732,8 @@ class StartLifecycleFailureDetailTests(unittest.TestCase):
                  patch("core.orchestration.skill_dispatch."
                        "run_untrusted_networked",
                        side_effect=dispatcher), \
+                 patch("core.llm.cc_probe.probe_cc_session_model",
+                       return_value="fake-model"), \
                  patch("core.run.pin._process_project", None), \
                  patch("core.run.pin._process_project_set", False), \
                  patch.dict("os.environ", _FIRST_PARTY_PROVIDER_ENV), \
