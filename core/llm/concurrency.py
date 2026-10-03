@@ -110,7 +110,7 @@ def _is_bedrock_primary(model: str) -> bool:
 
 # Concurrency ceiling when the primary model is served by a single local
 # inference server (Ollama, or any OpenAI-compatible endpoint on a
-# loopback/LAN host such as vLLM / LM Studio / llama.cpp). Unlike a cloud
+# loopback host such as vLLM / LM Studio / llama.cpp). Unlike a cloud
 # API, one local server shares a single GPU/weight/KV-cache pool — N
 # concurrent requests contend for it and either queue, thrash, or OOM the
 # box. The adaptive 429 throttle can't help (local servers don't emit

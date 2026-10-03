@@ -354,6 +354,37 @@ class TestLocalWorkerCap:
         )
         assert derive_max_workers("qwen3-27b") == 8
 
+    def test_invalid_env_falls_back_to_default(self, monkeypatch):
+        from core.llm.concurrency import (
+            LOCAL_MAX_WORKERS_DEFAULT,
+            derive_max_workers,
+        )
+
+        self._mock_primary(monkeypatch, "ollama", "qwen3-27b")
+        self._mock_rpm(monkeypatch, 0)
+        self._no_tuning(monkeypatch)
+        monkeypatch.setenv("RAPTOR_LOCAL_MAX_WORKERS", "abc")
+        assert derive_max_workers("qwen3-27b") == LOCAL_MAX_WORKERS_DEFAULT
+
+    def test_env_zero_clamped_to_one(self, monkeypatch):
+        from core.llm.concurrency import derive_max_workers
+
+        self._mock_primary(monkeypatch, "ollama", "qwen3-27b")
+        self._mock_rpm(monkeypatch, 0)
+        self._no_tuning(monkeypatch)
+        monkeypatch.setenv("RAPTOR_LOCAL_MAX_WORKERS", "0")
+        assert derive_max_workers("qwen3-27b") == 1
+
+    def test_non_matching_model_not_capped(self, monkeypatch):
+        """A model name that doesn't match the configured primary should
+        not trigger the local cap — falls through to serial(1)."""
+        from core.llm.concurrency import derive_max_workers
+
+        self._mock_primary(monkeypatch, "ollama", "qwen3-27b")
+        self._mock_rpm(monkeypatch, 0)
+        self._no_tuning(monkeypatch)
+        assert derive_max_workers("some-other-model") == 1
+
 
 class TestWarmClaudecodeProbe:
     def _mock_primary(self, monkeypatch, provider):
