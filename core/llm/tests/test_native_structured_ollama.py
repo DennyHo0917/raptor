@@ -171,6 +171,23 @@ class TestStripThinkBlocks:
         text = '{"reasoning": "checked </think> and found it"}'
         assert _strip_think_blocks(text) == text
 
+    def test_paired_block_inside_json_string_survives_via_build(self):
+        # A JSON value containing <think>…</think> must not be corrupted.
+        # _build_structured_response tries json.loads first; valid JSON
+        # skips _strip_think_blocks entirely.
+        provider = _provider("ollama")
+        pyd = _dict_schema_to_pydantic(_SCHEMA)
+        resp = LLMResponse(
+            content='{"verdict": "needs_analysis", '
+                    '"prerequisites": ["saw <think>x</think> in output"]}',
+            model="test-model", provider="ollama", tokens_used=5,
+            cost=0.0, finish_reason="complete",
+        )
+        out = provider._build_structured_response(resp, _SCHEMA, pyd)
+        assert out.result["prerequisites"] == [
+            "saw <think>x</think> in output",
+        ]
+
     def test_leaves_clean_text_untouched(self):
         assert _strip_think_blocks('{"x": 1}') == '{"x": 1}'
 
