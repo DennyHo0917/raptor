@@ -115,8 +115,10 @@ def _is_bedrock_primary(model: str) -> bool:
 # concurrent requests contend for it and either queue, thrash, or OOM the
 # box. The adaptive 429 throttle can't help (local servers don't emit
 # 429s under load), so the cap must be set a priori. Conservative default
-# of 2; ``RAPTOR_LOCAL_MAX_WORKERS`` overrides; ``tuning.json``'s
-# ``max_llm_workers`` still beats both.
+# of 2; ``RAPTOR_LOCAL_MAX_WORKERS`` overrides. Unlike the CC/Bedrock
+# caps, the local cap also clamps the ``tuning.json`` override — a stale
+# ``max_llm_workers`` left over from a cloud run must not flood a single
+# GPU (cloud providers have backpressure via 429s; a local server OOMs).
 LOCAL_MAX_WORKERS_DEFAULT = 2
 
 
@@ -204,7 +206,21 @@ def derive_max_workers(model: str) -> int:
     """
     override = read_tuning_max_llm_workers()
     if override is not None:
-        return max(1, min(override, MAX_WORKERS_CAP))
+        cap = max(1, min(override, MAX_WORKERS_CAP))
+        # Local-only clamp: a stale max_llm_workers from a cloud run
+        # must not flood a single GPU. CC/Bedrock can absorb the
+        # excess (429s / subprocess cost); a local server just OOMs.
+        if _is_local_primary(model):
+            local = _local_worker_cap()
+            if cap > local:
+                logger.warning(
+                    "max_llm_workers=%d clamped to local cap %d for "
+                    "single-GPU server — raise with "
+                    "RAPTOR_LOCAL_MAX_WORKERS",
+                    cap, local,
+                )
+                cap = local
+        return cap
 
     from core.llm.model_data import rpm_for
 

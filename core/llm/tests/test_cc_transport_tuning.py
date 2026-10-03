@@ -341,18 +341,50 @@ class TestLocalWorkerCap:
             derive_max_workers("qwen3-27b") == LOCAL_MAX_WORKERS_DEFAULT
         )
 
-    def test_tuning_override_still_wins(self, monkeypatch):
-        """tuning.json max_llm_workers remains authoritative — the operator
-        can raise concurrency deliberately."""
+    def test_tuning_override_clamped_to_local_cap(self, monkeypatch):
+        """tuning.json max_llm_workers is clamped by the local cap —
+        a stale global override from a cloud run must not flood a
+        single GPU (no 429 backpressure, just OOM)."""
+        from core.llm.concurrency import (
+            LOCAL_MAX_WORKERS_DEFAULT,
+            derive_max_workers,
+        )
+
+        self._mock_primary(monkeypatch, "ollama", "qwen3-27b")
+        self._mock_rpm(monkeypatch, 0)
+        monkeypatch.setattr(
+            "core.llm.concurrency.read_tuning_max_llm_workers",
+            lambda: 16,
+        )
+        assert derive_max_workers("qwen3-27b") == LOCAL_MAX_WORKERS_DEFAULT
+
+    def test_tuning_override_with_explicit_local_env(self, monkeypatch):
+        """RAPTOR_LOCAL_MAX_WORKERS is the escape hatch: an operator who
+        explicitly raises the local cap gets that cap even when
+        tuning.json is also set."""
+        from core.llm.concurrency import derive_max_workers
+
+        self._mock_primary(monkeypatch, "ollama", "qwen3-27b")
+        self._mock_rpm(monkeypatch, 0)
+        monkeypatch.setenv("RAPTOR_LOCAL_MAX_WORKERS", "8")
+        monkeypatch.setattr(
+            "core.llm.concurrency.read_tuning_max_llm_workers",
+            lambda: 16,
+        )
+        assert derive_max_workers("qwen3-27b") == 8
+
+    def test_tuning_override_below_local_cap_not_clamped(self, monkeypatch):
+        """When tuning.json sets a value at or below the local cap,
+        the clamp is a no-op — no warning, no change."""
         from core.llm.concurrency import derive_max_workers
 
         self._mock_primary(monkeypatch, "ollama", "qwen3-27b")
         self._mock_rpm(monkeypatch, 0)
         monkeypatch.setattr(
             "core.llm.concurrency.read_tuning_max_llm_workers",
-            lambda: 8,
+            lambda: 1,
         )
-        assert derive_max_workers("qwen3-27b") == 8
+        assert derive_max_workers("qwen3-27b") == 1
 
     def test_invalid_env_falls_back_to_default(self, monkeypatch):
         from core.llm.concurrency import (
