@@ -1609,7 +1609,7 @@ class LLMClient:
         # cap — track a dedicated pre-call counter and token tally,
         # plus a run-start timestamp for the wall-clock deadline. All
         # guarded by _stats_lock.
-        self._run_start = time.monotonic()
+        self._run_start: float | None = None
         self._governed_calls = 0
         self._governed_tokens = 0
         # Entries whose provenance token was PRESENT but invalid — a
@@ -2944,6 +2944,13 @@ class LLMClient:
         existing budget catch site) when any set limit is breached.
         Unset limits (``None``) never fire, so default runs are
         unaffected.
+
+        **Call counting**: every provider *attempt* (including retries
+        and fallback-walk attempts) increments the counter, so
+        ``max_calls_per_scan`` bounds total provider round-trips, not
+        logical caller-visible calls. The wall-clock deadline is the
+        first line of defence against runaway retries on a flaky model;
+        the call cap catches the rest.
         """
         cfg = self.config
         max_seconds = getattr(cfg, "max_seconds_per_scan", None)

@@ -61,12 +61,17 @@ class TestGovernorUnit:
 
     def test_wall_clock_cap(self):
         client = _client(max_seconds_per_scan=10.0)
-        base = client._run_start
+        # _run_start is None until the first governor check (lazy-init).
+        assert client._run_start is None
+        # First check lazy-inits the start time.
+        with patch("core.llm.client.time.monotonic", return_value=100.0):
+            client._check_governor()
+        assert client._run_start == 100.0
         # Just under the deadline — ok.
-        with patch("core.llm.client.time.monotonic", return_value=base + 9.0):
+        with patch("core.llm.client.time.monotonic", return_value=109.0):
             client._check_governor()
         # At/over the deadline — fires.
-        with patch("core.llm.client.time.monotonic", return_value=base + 10.0):
+        with patch("core.llm.client.time.monotonic", return_value=110.0):
             with pytest.raises(LLMGovernorExceededError):
                 client._check_governor()
 
@@ -84,6 +89,29 @@ class TestGovernorUnit:
         client._check_governor()
         with pytest.raises(LLMGovernorExceededError):
             client._check_governor()
+
+    def test_multiple_caps_first_to_fire(self):
+        client = _client(max_calls_per_scan=5, max_tokens_per_scan=100)
+        # Token cap fires first (before call cap is reached).
+        client._check_governor()  # call 1
+        client._record_governed_tokens(100)
+        with pytest.raises(LLMGovernorExceededError, match="token limit"):
+            client._check_governor()
+
+    def test_record_zero_and_negative_tokens_ignored(self):
+        client = _client(max_tokens_per_scan=100)
+        client._record_governed_tokens(0)
+        client._record_governed_tokens(-50)
+        assert client._governed_tokens == 0
+
+    def test_run_start_lazy_init_on_new_client(self):
+        # Clients built via __new__ (test harness) have no _run_start.
+        client = LLMClient.__new__(LLMClient)
+        client.config = LLMConfig(max_seconds_per_scan=60.0)
+        client._stats_lock = __import__("threading").Lock()
+        # First check must lazy-init _run_start, not crash.
+        client._check_governor()
+        assert client._run_start is not None
 
 
 class TestGovernorTerminalInGenerate:
