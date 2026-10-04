@@ -12,7 +12,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: 1e59ff53f52a75c0680203f150e6c207010fcf1a
+          ref: 0d26a21ecf02b13e1d686b9feb1c73755bcc9f9d
       - uses: astral-sh/setup-uv@v6
       - name: Install locked dependencies
         run: uv sync --locked --python 3.14 --group test --group lint
