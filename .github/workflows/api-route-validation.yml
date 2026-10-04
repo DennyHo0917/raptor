@@ -1,0 +1,62 @@
+name: API Route validation
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  provider:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/api-route-provider
+      - uses: astral-sh/setup-uv@v6
+      - name: Install locked dependencies
+        run: uv sync --locked --python 3.14 --group test --group lint
+      - name: Focused provider regression
+        run: uv run --no-sync python -m pytest core/llm/dispatcher/tests/test_providers.py core/llm/dispatcher/tests/test_seed_from_config.py core/security/tests/test_llm_family.py .github/scripts/tests/test_check_env_docs.py -q
+      - name: Lint and repository gates
+        run: |
+          uv run --no-sync ruff check core/config/__init__.py core/llm/dispatcher/auth.py core/llm/dispatcher/server.py core/llm/dispatcher/tests/test_providers.py core/llm/dispatcher/tests/test_seed_from_config.py core/security/llm_family.py core/security/tests/test_llm_family.py
+          uv run --no-sync python .github/scripts/check_env_docs.py
+          uv run --no-sync python .github/scripts/check_vocab_lists.py
+          uv run --no-sync python .github/scripts/check_miswiring.py
+      - name: Live request through the dispatcher
+        env:
+          API_ROUTE_API_KEY: ${{ secrets.API_ROUTE_TEST_KEY }}
+        run: |
+          uv run --no-sync python - <<'PY'
+          import json
+          import os
+          import tempfile
+          from pathlib import Path
+          import httpx
+          from core.llm.dispatcher.auth import CredentialStore
+          from core.llm.dispatcher.server import LLMDispatcher, _TOKEN_HEADER
+
+          with tempfile.TemporaryDirectory(prefix="api-route-live-") as temporary:
+              dispatcher = LLMDispatcher(
+                  run_id="api-route-live", creds=CredentialStore(),
+                  audit_path=Path(temporary) / "audit.jsonl",
+                  token_ttl_s=180, token_budget=5,
+              )
+              try:
+                  _, fd = dispatcher.allocate_worker(label="provider-smoke")
+                  token = os.read(fd, 64).decode().strip()
+                  os.close(fd)
+                  with httpx.Client(transport=httpx.HTTPTransport(uds=str(dispatcher.socket_path)), timeout=90) as client:
+                      response = client.post(
+                          "http://_/apiroute/v1/chat/completions",
+                          headers={_TOKEN_HEADER: token, "Authorization": "Bearer worker-placeholder"},
+                          json={"model": "deepseek-v4.1-flash", "messages": [{"role": "user", "content": "Reply with only PONG."}], "max_tokens": 1024, "temperature": 0.1},
+                      )
+                      response.raise_for_status()
+                      result = response.json()
+                      content = result["choices"][0]["message"].get("content")
+                      assert content, "Expected a nonempty reply"
+                      assert os.environ["API_ROUTE_API_KEY"] not in response.text
+                      print(json.dumps({"status": response.status_code, "model": result.get("model"), "content": content, "usage": result.get("usage")}))
+              finally:
+                  dispatcher.shutdown()
+          PY
