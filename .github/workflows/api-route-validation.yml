@@ -1,6 +1,8 @@
 name: API Route validation
 on:
   workflow_dispatch:
+  push:
+    branches: [api-route-validation]
 permissions:
   contents: read
 jobs:
